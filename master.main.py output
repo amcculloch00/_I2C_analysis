@@ -1,0 +1,8 @@
+### main.py master output
+
+I2C devices found: ['0x3c']
+Sent transaction to 0x3c
+Sent transaction to 0x3c
+.
+.
+.
