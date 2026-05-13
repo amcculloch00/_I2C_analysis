@@ -1,0 +1,95 @@
+from machine import Pin
+import time
+
+SCL_PIN = 3 #GP3 on Pico (pin 5)
+SDA_PIN = 2 #GP2 on Pico (pin 4)
+
+scl = Pin(SCL_PIN, Pin.IN)
+sda = Pin(SDA_PIN, Pin.IN)
+
+print("Sniffer started. Watching for SCL edges...")
+
+bits = [] #array of accumulated bits (until 1 byte accumulated)
+in_transaction = False #false when waiting for START, true when in a transaction
+byte_count = 0  #tracks bytes recieved in the current transaction. address byte == 0, others > 0
+transaction = [] #transaction events stored in this array
+
+def format_transaction(t):
+    #if list is empty, do nothing
+    if not t:
+        return
+    #if list is not empty, append items in list and format nicely
+    print("  ".join(t))
+    print()
+
+print("Sniffer ready.")
+
+#record current states before starting loop
+#compared against current values to detect changes and specific conditions (START/STOP)
+prev_scl = scl.value()
+prev_sda = sda.value()
+
+while True:
+    #read current states
+    curr_scl = scl.value()
+    curr_sda = sda.value()
+
+    #START detected when SDA falls while SCL is high
+    if curr_scl == 1 and prev_sda == 1 and curr_sda == 0:
+        #if already in a transaction, print whats in the list so far (handles repeated START (without a preceeding STOP)
+        if in_transaction and transaction:
+            format_transaction(transaction)
+       
+       #write a fresh transaction
+        transaction = ["START"] #new list with new START event
+        bits = [] #clear leftover bits/partial bits
+        byte_count = 0 #reset to 0 so next byte is treated as a start address
+        in_transaction = True #we are in a transaction B)
+
+    #STOP detected when SDA rises while SCL is high
+    elif curr_scl == 1 and prev_sda == 0 and curr_sda == 1:
+        #if already in a transaction, append "STOP" to the list
+        if in_transaction:
+            transaction.append("STOP")
+            format_transaction(transaction)
+        #no longer in a transaction
+        in_transaction = False
+        #reset everything
+        transaction = [] 
+        bits = []
+        byte_count = 0
+
+    #i2c data bits are valid only on SCL rising edge
+    elif curr_scl == 1 and prev_scl == 0 and in_transaction:
+        bits.append(curr_sda)
+
+        #once 8 bits + ACK/NACK are accumulated, byte is complete
+        if len(bits) == 9: 
+            data_bits = bits[:8] #first 8 bits are data
+            ack_bit = bits[8] #last bit is ACK/NAKC
+
+            #assemble data bits into a byte by left shifting -- new bits added on the right
+            byte_val = 0 
+            for b in data_bits:
+                byte_val = (byte_val << 1) | b
+
+            #ACK detected when SDA pulled low (0)
+            #NACK detected when SDA stays high (1)
+            ack_str = "ACK" if ack_bit == 0 else "NACK"
+
+            #address byte
+            if byte_count == 0:
+                addr = byte_val >> 1 #address is first 7 bits
+                rw = "R" if (byte_val & 1) else "W" #R/W is 8th/LSB bit. R=1, W=0
+                transaction.append(f"ADDR 0x{addr:02X} {rw}")
+            #data bytes
+            else:
+                transaction.append(f"DATA 0x{byte_val:02X}")
+
+            transaction.append(ack_str) #append ACK/NACK after every byte
+            bits = [] #clear for next byte
+            byte_count += 1 #inc for next data byte
+
+    #updat SCL and SDA values
+    prev_scl = curr_scl
+    prev_sda = curr_sda
