@@ -1,0 +1,21 @@
+import machine
+import time
+from machine import I2C, Pin
+
+#initialize I2C on GP4 (SDA) and GP5 (SCL)
+i2c = I2C(0, sda=Pin(4), scl=Pin(5), freq=400000)
+
+#scan for devices and print their addresses
+devices = i2c.scan()
+print("I2C devices found:", [hex(d) for d in devices])
+
+#simple repeating transaction every second
+while True:
+    try:
+        if devices:
+            #i2c.writeto does ____
+            i2c.writeto(devices[0], bytes([0x00, 0xAF]))
+            print("Sent transaction to", hex(devices[0]))
+    except Exception as e:
+        print("Error:", e)
+    time.sleep(1)
