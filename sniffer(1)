@@ -1,0 +1,3 @@
+#previous sniffer code would output NACK after Data 0x00, and ACK needed
+#this sniffer code occasionally outputs address 0x7C instead of 0x3C -- can fix this in parsing system 
+#it also outputs START STOP between each line -- can also clean up later
