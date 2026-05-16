@@ -1,3 +1,116 @@
 #previous sniffer code would output NACK after Data 0x00, and ACK needed
 #this sniffer code occasionally outputs address 0x7C instead of 0x3C -- can fix this in parsing system 
 #it also outputs START STOP between each line -- can also clean up later
+
+from machine import Pin
+import micropython
+
+### SETUP ###
+
+#reserve memory for emergency exception messages (inside interrupts)
+micropython.alloc_emergency_exception_buf(100)
+
+SCL_PIN = 3
+SDA_PIN = 2
+
+#both pins are configured as inputs
+scl = Pin(SCL_PIN, Pin.IN)
+sda = Pin(SDA_PIN, Pin.IN)
+
+#state variables
+bits = bytearray()		#bytearray() instead of list [] for faster appends
+in_transaction = False 	#false between STOP and START, true when in a transaction
+byte_count = 0  		#tracks bytes recieved in the current transaction. address byte == 0, others > 0
+transaction = [] 		#transaction events stored in this array
+event_queue = []		#interrupt handlers push onto this list, main loop reads from it and process events at own pace
+
+#cache .value methods locally for faster lookup later
+sda_val = sda.value
+scl_val = scl.value
+
+
+### INTERRUPT HANDLERS ###
+
+def scl_rising_handler(pin):
+    #runs on SCL rising edge
+    #SDA holds value of current data bit, which is pushed into event_queue
+    event_queue.append(sda_val())
+
+def sda_change_handler(pin):
+    #runs when SDA changes (rise or fall)
+    #SCL high when SDA changes --> START or STOP detected
+    if scl_val() == 1:
+        #if SDA == 0 : SDA fell --> START (code: 100)
+        #if SDA == 1 : SDA rise --> STOP (code: 101)
+        event_queue.append(100 if sda_val() == 0 else 101)
+
+#connect the interrupt handlers to the pins
+#IRQ_RISING --> "trigger only on rising edges"
+#IRQ_RISING | Pin.IRQ_FALLING --> "trigger on ANY change"
+scl.irq(trigger=Pin.IRQ_RISING, handler=scl_rising_handler)
+sda.irq(trigger=Pin.IRQ_RISING | Pin.IRQ_FALLING, handler=sda_change_handler)
+
+#formatting
+def format_transaction(t):
+    if not t:
+        return
+    print("  ".join(t))
+    print()
+
+print("Interrupt sniffer ready :)")
+
+### MAIN LOOP ###
+
+while True:
+    if not event_queue:
+        continue
+
+    #get most recent event off of queue
+    event = event_queue.pop(0)
+
+    #check event code, see which event is occurring
+    #START
+    if event == 100:
+        if in_transaction and transaction:
+            format_transaction(transaction)
+        #in a transaction now
+        transaction = ["START"]
+        bits = bytearray()
+        byte_count = 0
+        in_transaction = True
+
+    #STOP
+    elif event == 101:
+        if in_transaction:
+            transaction.append("STOP")
+            format_transaction(transaction)
+        #reset
+        in_transaction = False
+        transaction = []
+        bits = bytearray()
+        byte_count = 0
+
+    #not start or stop
+    elif in_transaction: 
+        bits.append(event)
+        
+        #data is first 8 bits, LSB is ACK/NACK
+        if len(bits) == 9:
+            byte_val = 0 		
+            for i in range(8):
+                byte_val = (byte_val << 1) | bits[i]	
+            ack_bit = bits[8]
+            ack_str = "ACK" if ack_bit == 0 else "NACK"
+           
+           #determine if it's an address byte or a data byte
+           #address
+           if byte_count == 0:
+                addr = byte_val >> 1
+                rw = "R" if (byte_val & 1) else "W"
+                transaction.append("ADDR 0x{:02X} {}".format(addr, rw))
+            #data
+            else:
+                transaction.append("DATA 0x{:02X}".format(byte_val))
+            transaction.append(ack_str)
+            bits = bytearray()
+            byte_count += 1 #i++
