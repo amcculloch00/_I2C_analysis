@@ -3,7 +3,7 @@ import time
 from machine import I2C, Pin
 
 #initialize I2C on GP4 (SDA) and GP5 (SCL)
-i2c = I2C(0, sda=Pin(4), scl=Pin(5), freq=400000)
+i2c = I2C(0, sda=Pin(4), scl=Pin(5), freq=10000) #running at 10k allows sniffer to get an OK output. not perfect
 
 #scan for devices and print their addresses
 devices = i2c.scan()
